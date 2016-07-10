@@ -7,12 +7,17 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 )
+
+var Logging bool
+var openIDRegex = regexp.MustCompile("\\((.*)\\)")
 
 const (
 	AuthURL        = "https://graph.qq.com/oauth2.0/authorize"
 	AccessTokenURL = "https://graph.qq.com/oauth2.0/token"
-	UserInfoURL    = "https://api.weibo.com/2/users/show.json"
+	OpenIDURL      = "https://graph.qq.com/oauth2.0/me"
+	UserInfoURL    = "https://graph.qq.com/user/get_user_info"
 )
 
 type OAuth struct {
@@ -30,11 +35,16 @@ type OAuthToken struct {
 }
 
 type UserInfo struct {
-	UID         int64  `json:"id"`
-	Name        string `json:"name"`
-	Location    string `json:"location"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
+	Ret      int    `json:"ret"`
+	Message  string `json:"msg"`
+	Nickname string `json:"nickname"`
+	City     string `json:"city"`
+	Province string `json:"province"`
+}
+
+type OpenID struct {
+	ClientID string `json:"client_id"`
+	OpenID   string `json:"openid"`
 }
 
 func NewQQOAuth(clientID, clientSecret, redirectURL string) (*OAuth, error) {
@@ -80,20 +90,28 @@ func (oauth *OAuth) GetAccessToken(code string) (*OAuthToken, error) {
 		"client_secret": {oauth.ClientSecret},
 		"code":          {code},
 		"redirect_uri":  {oauth.RedirectURL}}
-	accessTokenFullURL := AccessTokenURL + "?" + qs.Encode()
-	resp, err := http.Get(accessTokenFullURL)
+	reqURL := AccessTokenURL + "?" + qs.Encode()
+	if Logging {
+		logReq("GET: " + reqURL)
+	}
+
+	resp, err := http.Get(reqURL)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	bodyStr := string(bodyBytes)
 
-	log.Print("--body ", string(body))
-	bodyQs, err := url.ParseQuery(string(body))
+	if Logging {
+		logResp(bodyStr)
+	}
+
+	bodyQs, err := url.ParseQuery(bodyStr)
 	if err != nil {
 		return nil, err
 	}
@@ -107,13 +125,62 @@ func (oauth *OAuth) GetAccessToken(code string) (*OAuthToken, error) {
 	return token, err
 }
 
-func (oauth *OAuth) GetUserInfo(token *OAuthToken, uid string) (*UserInfo, error) {
-	if token == nil {
-		return nil, errors.New("token cannot be nil")
+func (oauth *OAuth) GetOpenID(accessToken string) (*OpenID, error) {
+	if accessToken == "" {
+		return nil, errors.New("accessToken cannot be empty")
 	}
-	qs := url.Values{"access_token": {token.AccessToken},
-		"uid": {uid}}
+	qs := url.Values{
+		"access_token": {accessToken}}
+	reqURL := OpenIDURL + "?" + qs.Encode()
+	if Logging {
+		logReq("GET: " + reqURL)
+	}
+
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	bodyStr := string(bodyBytes)
+
+	if Logging {
+		logResp(bodyStr)
+	}
+
+	regexRes := openIDRegex.FindStringSubmatch(bodyStr)
+	if regexRes == nil || len(regexRes) < 2 {
+		return nil, errors.New("Invalid content")
+	}
+
+	bodyJSON := regexRes[1]
+	openID := &OpenID{}
+	err = json.Unmarshal([]byte(bodyJSON), openID)
+	if err != nil {
+		return nil, err
+	}
+	return openID, err
+}
+
+func (oauth *OAuth) GetUserInfo(accessToken string, openID string) (*UserInfo, error) {
+	if accessToken == "" {
+		return nil, errors.New("accessToken cannot be nil")
+	}
+	if openID == "" {
+		return nil, errors.New("openID cannot be nil")
+	}
+	qs := url.Values{
+		"oauth_consumer_key": {oauth.ClientID},
+		"access_token":       {accessToken},
+		"openid":             {openID}}
 	urlStr := UserInfoURL + "?" + qs.Encode()
+	if Logging {
+		logReq("GET: " + urlStr)
+	}
 
 	resp, err := http.Get(urlStr)
 	if err != nil {
@@ -121,15 +188,26 @@ func (oauth *OAuth) GetUserInfo(token *OAuthToken, uid string) (*UserInfo, error
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	bodyStr := string(bodyBytes)
+	if Logging {
+		logResp(bodyStr)
+	}
 
 	ret := &UserInfo{}
-	err = json.Unmarshal(body, ret)
+	err = json.Unmarshal(bodyBytes, ret)
 	if err != nil {
 		return nil, err
 	}
 	return ret, nil
+}
+
+func logReq(content string) {
+	log.Print("Request: " + content)
+}
+func logResp(content string) {
+	log.Print("Response: " + content)
 }
