@@ -22,14 +22,11 @@ type OAuth struct {
 }
 
 type OAuthToken struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	RemindIn    string `json:"remind_in"`
-	UIDString   string `json:"uid"`
-
-	Error        string `json:"error"`
-	ErrorCode    int    `json:"error_code"`
-	ErrorMessage string `json:"error_description"`
+	AccessToken  string
+	ExpiresIn    string
+	RefreshToken string
+	Code         string
+	Msg          string
 }
 
 type UserInfo struct {
@@ -76,13 +73,15 @@ func (oauth *OAuth) GetAccessToken(code string) (*OAuthToken, error) {
 	if code == "" {
 		return nil, errors.New("code cannot be empty")
 	}
-	resp, err := http.PostForm(AccessTokenURL,
-		url.Values{
-			"grant_type":    {"authorization_code"},
-			"client_id":     {oauth.ClientID},
-			"client_secret": {oauth.ClientSecret},
-			"code":          {code},
-			"redirect_uri":  {oauth.RedirectURL}})
+
+	qs := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {oauth.ClientID},
+		"client_secret": {oauth.ClientSecret},
+		"code":          {code},
+		"redirect_uri":  {oauth.RedirectURL}}
+	accessTokenFullURL := AccessTokenURL + "?" + qs.Encode()
+	resp, err := http.Get(accessTokenFullURL)
 	if err != nil {
 		return nil, err
 	}
@@ -94,14 +93,17 @@ func (oauth *OAuth) GetAccessToken(code string) (*OAuthToken, error) {
 	}
 
 	log.Print("--body ", string(body))
-	token := &OAuthToken{}
-	err = json.Unmarshal(body, token)
+	bodyQs, err := url.ParseQuery(string(body))
 	if err != nil {
 		return nil, err
 	}
-	if token.ErrorCode != 0 {
-		return nil, errors.New(token.ErrorMessage)
-	}
+
+	token := &OAuthToken{}
+	token.AccessToken = bodyQs.Get("access_token")
+	token.ExpiresIn = bodyQs.Get("expires_in")
+	token.RefreshToken = bodyQs.Get("refresh_token")
+	token.Code = bodyQs.Get("code")
+	token.Msg = bodyQs.Get("msg")
 	return token, err
 }
 
