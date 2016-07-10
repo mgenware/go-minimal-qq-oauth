@@ -75,6 +75,10 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
+	if profile.Ret != 0 {
+		w.Write([]byte(profile.Message))
+		return
+	}
 	w.Write([]byte(fmt.Sprint(profile)))
 }
 
